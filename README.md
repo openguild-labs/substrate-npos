@@ -19,7 +19,18 @@ Before we implement the NPOS (Nominated Proof of Stake) which is PoS (Proof of S
 - Substrate's implementation of BABE also has a **fallback mechanism for when no authorities are chosen in a given slot**. These **secondary slot** assignments allow BABE to achieve a constant block time.
 
 ### Code Breakdown
+Read more about [the configuration of BABE pallet.](https://paritytech.github.io/polkadot-sdk/master/pallet_babe/pallet/trait.Config.html)
 ```rust
+pub const MILLISECS_PER_BLOCK: Moment = 3000;
+pub const EPOCH_DURATION_IN_BLOCKS: BlockNumber = 10 * MINUTES;
+pub const EPOCH_DURATION_IN_SLOTS: u64 = {
+  const SLOT_FILL_RATE: f64 = MILLISECS_PER_BLOCK as f64 / SLOT_DURATION as f64;
+  (EPOCH_DURATION_IN_BLOCKS as f64 * SLOT_FILL_RATE) as u64
+};
+
+const EpochDuration : u64 = EPOCH_DURATION_IN_BLOCKS;
+const ExpectedBlockTime : u64 = MILLISECS_PER_BLOCK;
+
 impl pallet_babe::Config for Runtime {
     type EpochDuration = EpochDuration;
     type ExpectedBlockTime = ExpectedBlockTime;
@@ -33,6 +44,30 @@ impl pallet_babe::Config for Runtime {
         <Historical as KeyOwnerProofSystem<(KeyTypeId, pallet_babe::AuthorityId)>>::Proof;
     type EquivocationReportSystem =
         pallet_babe::EquivocationReportSystem<Self, Offences, Historical, ReportLongevity>;
+}
+```
+Firstly, we define some constant variables and assign those to the type parameters `EpochDuration` and `ExpectedBlockTime`. These type parameters are quite straightforward:
+- [`EpochDuration`](https://paritytech.github.io/polkadot-sdk/master/pallet_babe/pallet/trait.Config.html#required-associated-types): The amount of time, in slots, that each epoch should last. NOTE: Currently it is not possible to change the epoch duration after the chain has started. Attempting to do so will brick block production.
+- [`ExpectedBlockTime`](https://paritytech.github.io/polkadot-sdk/master/pallet_babe/pallet/trait.Config.html#required-associated-types): The expected time for BABE to produce a new block. This is not a fixed block time like AURA which the block author is deterministically assigned usign turn-based RR algorithm. Hence, the expected block time is an average block time based on the number of slot duration and **the security parameter c (where 1 - c represents the probability of a slot being empty).**
+
+```rust
+impl EpochChangeTrigger for ExternalTrigger {
+	fn trigger<T: Config>(_: BlockNumberFor<T>) {} // nothing - trigger is external.
+}
+
+/// A type signifying to BABE that it should perform epoch changes
+/// with an internal trigger, recycling the same authorities forever.
+pub struct SameAuthoritiesForever;
+
+impl EpochChangeTrigger for SameAuthoritiesForever {
+	fn trigger<T: Config>(now: BlockNumberFor<T>) {
+		if <Pallet<T>>::should_epoch_change(now) {
+			let authorities = <Pallet<T>>::authorities();
+			let next_authorities = authorities.clone();
+
+			<Pallet<T>>::enact_epoch_change(authorities, next_authorities, None);
+		}
+	}
 }
 ```
 ## Ressource
