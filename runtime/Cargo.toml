@@ -31,6 +31,8 @@ frame-system-benchmarking = { workspace = true }
 frame-system-rpc-runtime-api = { workspace = true }
 frame-try-runtime = { workspace = true }
 pallet-aura = { workspace = true }
+pallet-babe = { workspace = true }
+pallet-offences = { workspace = true }
 pallet-authorship = { workspace = true }
 pallet-balances = { workspace = true }
 pallet-message-queue = { workspace = true }
@@ -96,11 +98,13 @@ std = [
 	"frame-try-runtime/std",
 	"log/std",
 	"pallet-aura/std",
+	"pallet-babe/std",
+	"pallet-session/std",
+	"pallet-offences/std",
 	"pallet-authorship/std",
 	"pallet-balances/std",
 	"pallet-collator-selection/std",
 	"pallet-message-queue/std",
-	"pallet-session/std",
 	"pallet-sudo/std",
 	"pallet-timestamp/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",
@@ -162,11 +166,13 @@ try-runtime = [
 	"frame-system/try-runtime",
 	"frame-try-runtime/try-runtime",
 	"pallet-aura/try-runtime",
+	"pallet-babe/try-runtime",
+	"pallet-session/try-runtime",
+	"pallet-offences/try-runtime",
 	"pallet-authorship/try-runtime",
 	"pallet-balances/try-runtime",
 	"pallet-collator-selection/try-runtime",
 	"pallet-message-queue/try-runtime",
-	"pallet-session/try-runtime",
 	"pallet-sudo/try-runtime",
 	"pallet-timestamp/try-runtime",
 	"pallet-transaction-payment/try-runtime",

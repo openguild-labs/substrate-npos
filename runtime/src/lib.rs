@@ -32,7 +32,10 @@ use frame_support::{
     dispatch::DispatchClass,
     genesis_builder_helper::{build_config, create_default_config},
     parameter_types,
-    traits::{ConstBool, ConstU32, ConstU64, ConstU8, EitherOfDiverse, TransformOrigin},
+    traits::{
+        ConstBool, ConstU32, ConstU64, ConstU8, EitherOfDiverse, KeyOwnerProofSystem,
+        TransformOrigin,
+    },
     weights::{
         constants::WEIGHT_REF_TIME_PER_SECOND, ConstantMultiplier, Weight, WeightToFeeCoefficient,
         WeightToFeeCoefficients, WeightToFeePolynomial,
@@ -219,19 +222,17 @@ pub const fn deposit(items: u32, bytes: u32) -> Balance {
 pub const MILLISECS_PER_BLOCK: Moment = 3000;
 pub const SECS_PER_BLOCK: Moment = MILLISECS_PER_BLOCK / 1000;
 
-// NOTE: Currently it is not possible to change the slot duration after the chain has started.
-//       Attempting to do so will brick block production.
-pub const SLOT_DURATION: Moment = MILLISECS_PER_BLOCK;
-
 // 1 in 4 blocks (on average, not counting collisions) will be primary BABE blocks.
 pub const PRIMARY_PROBABILITY: (u64, u64) = (1, 4);
 
-// NOTE: Currently it is not possible to change the epoch duration after the chain has started.
+// NOTE: Currently it is not possible to change the slot duration after the chain has started.
 //       Attempting to do so will brick block production.
+pub const SLOT_DURATION: Moment = MILLISECS_PER_BLOCK;
 pub const EPOCH_DURATION_IN_BLOCKS: BlockNumber = 10 * MINUTES;
 pub const EPOCH_DURATION_IN_SLOTS: u64 = {
+    // Calculate the number of slots required to produce one block
     const SLOT_FILL_RATE: f64 = MILLISECS_PER_BLOCK as f64 / SLOT_DURATION as f64;
-
+    // By that way, we can calculate the epoch duration in one block
     (EPOCH_DURATION_IN_BLOCKS as f64 * SLOT_FILL_RATE) as u64
 };
 
@@ -280,11 +281,25 @@ pub fn native_version() -> NativeVersion {
     }
 }
 
+// A definition of types required to submit transactions from within the runtime.
+// https://crates.parity.io/frame_system/offchain/trait.SendTransactionTypes.html
+impl<C> frame_system::offchain::SendTransactionTypes<C> for Runtime
+where
+    RuntimeCall: From<C>,
+{
+    // The runtime expects the UncheckedExtrinsic type
+    // https://paritytech.github.io/substrate/master/sp_runtime/generic/struct.UncheckedExtrinsic.html
+    // An extrinsic right from the external world. This is unchecked and so can contain a signature.
+    type Extrinsic = UncheckedExtrinsic;
+    type OverarchingCall = RuntimeCall;
+}
+
 parameter_types! {
     pub const Version: RuntimeVersion = VERSION;
 
     pub const EpochDuration: u64 = EPOCH_DURATION_IN_SLOTS;
     pub const ExpectedBlockTime: u64 = MILLISECS_PER_BLOCK;
+    pub const ReportLongevity: u64 = 24 * 28 * 6 * EpochDuration::get();
 
     // This part is copied from Substrate's `bin/node/runtime/src/lib.rs`.
     //  The `RuntimeBlockLength` and `RuntimeBlockWeights` exist here because the
@@ -361,8 +376,34 @@ impl pallet_authorship::Config for Runtime {
     type EventHandler = (CollatorSelection,);
 }
 
+impl pallet_offences::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type IdentificationTuple = pallet_session::historical::IdentificationTuple<Self>;
+    type OnOffenceHandler = ();
+}
+
 parameter_types! {
     pub const ExistentialDeposit: Balance = EXISTENTIAL_DEPOSIT;
+}
+
+impl pallet_babe::Config for Runtime {
+    type EpochDuration = EpochDuration;
+    type ExpectedBlockTime = ExpectedBlockTime;
+    type EpochChangeTrigger = pallet_babe::SameAuthoritiesForever;
+    // Note: DisabledValidators trait is implemented for the pallet_session
+    type DisabledValidators = Session;
+    type WeightInfo = ();
+    type MaxAuthorities = ConstU32<100>;
+    type MaxNominators = ConstU32<100>;
+    type KeyOwnerProof =
+        <Historical as KeyOwnerProofSystem<(KeyTypeId, pallet_babe::AuthorityId)>>::Proof;
+    type EquivocationReportSystem =
+        pallet_babe::EquivocationReportSystem<Self, Offences, Historical, ReportLongevity>;
+}
+
+impl pallet_session::historical::pallet::Config for Runtime {
+    type FullIdentification = ();
+    type FullIdentificationOf = ();
 }
 
 impl pallet_balances::Config for Runtime {
@@ -549,7 +590,7 @@ construct_runtime!(
         // Collator support. The order of these 4 are important and shall not change.
         Authorship: pallet_authorship = 20,
         CollatorSelection: pallet_collator_selection = 21,
-        Session: pallet_session = 22,
+        Session: pallet_session = 22, // also used in for the staking feature
         Aura: pallet_aura = 23,
         AuraExt: cumulus_pallet_aura_ext = 24,
 
@@ -558,6 +599,12 @@ construct_runtime!(
         PolkadotXcm: pallet_xcm = 31,
         CumulusXcm: cumulus_pallet_xcm = 32,
         MessageQueue: pallet_message_queue = 33,
+
+        // NPOS relevant pallets
+        Babe: pallet_babe = 34,
+        Historical: pallet_session::historical::{Pallet} = 35,
+        Offences: pallet_offences = 36,
+        // Staking: pallet_staking,
     }
 );
 
@@ -568,6 +615,7 @@ mod benches {
         [pallet_balances, Balances]
         [pallet_session, SessionBench::<Runtime>]
         [pallet_timestamp, Timestamp]
+        [pallet_offences, Offences],
         [pallet_message_queue, MessageQueue]
         [pallet_sudo, Sudo]
         [pallet_collator_selection, CollatorSelection]
