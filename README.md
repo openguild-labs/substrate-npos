@@ -1,5 +1,13 @@
 # Nominated Proof of Stake (NPOS) Substrate-based Chain Tutorial
 Substrate node template is a node program for quickly developing Substrate application chains. It has a built-in **Proof of Authority (PoA)** consensus algorithm. The block generation algorithm is Aura , which means that the nodes and order of block generation are fixed. An online public blockchain application needs to achieve a certain degree of decentralization and ensure security through random block generation. Substrate's built-in Proof of Stake (PoS) consensus algorithm is designed to meet such needs.
+## Step 0: Create a new Parachain project with `pop-cli`
+You can learn more about `pop-cli` here: https://github.com/r0gue-io/pop-cli
+- Install the `pop-cli`: cargo install --locked --git https://github.com/r0gue-io/pop-cli
+- Create a new parachain boilerplate code with `pop new parachain substrate-npos`
+- Build your newly created local parachain with `cd substrate-npos && pop run parachain`
+- Run your local relaychain network using Zombinet with `pop up parachain -f ./zombienet.toml`
+Now you are ready to kickstart working on the later steps.
+
 ## Step 1: Migrate the Block Production algorithm (AURA -> BABE)
 Before we implement the NPOS (Nominated Proof of Stake) which is PoS (Proof of Stake) with the nomination mechanism, we will work on migrate the Substrate node template from its base consensus mechanism PoA to PoS first. Below are steps to migrate the Substrate-based chain template to the PoS blockchain.
 - To read more about the consensus in blockchain and Polkadot, [visit the official Substrate documentation](https://docs.substrate.io/learn/consensus/) or on [Polkadot Wiki - Learn Consensus](https://wiki.polkadot.network/docs/learn-consensus)
@@ -187,3 +195,4 @@ pub const ReportLongevity: u64 = 24 * 28 * 6 * EpochDuration::get();
 ## Ressource
 - Substrate NPOS implementation guide - Chinese version: https://zhuanlan.zhihu.com/p/161293660
 - Advanced Staking Concepts on Polkadot Wiki: https://wiki.polkadot.network/docs/learn-staking-advanced
+- Substrate Stencil (NPOS blockchain with Substrate): https://github.com/kaichaosun/substrate-stencil
