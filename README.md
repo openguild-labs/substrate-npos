@@ -22,14 +22,21 @@ Before we implement the NPOS (Nominated Proof of Stake) which is PoS (Proof of S
 Read more about [the configuration of BABE pallet.](https://paritytech.github.io/polkadot-sdk/master/pallet_babe/pallet/trait.Config.html)
 ```rust
 pub const MILLISECS_PER_BLOCK: Moment = 3000;
+pub const SLOT_DURATION: Moment = MILLISECS_PER_BLOCK;
 pub const EPOCH_DURATION_IN_BLOCKS: BlockNumber = 10 * MINUTES;
 pub const EPOCH_DURATION_IN_SLOTS: u64 = {
-  const SLOT_FILL_RATE: f64 = MILLISECS_PER_BLOCK as f64 / SLOT_DURATION as f64;
-  (EPOCH_DURATION_IN_BLOCKS as f64 * SLOT_FILL_RATE) as u64
+    // Calculate the number of slots required to produce one block
+    const SLOT_FILL_RATE: f64 = MILLISECS_PER_BLOCK as f64 / SLOT_DURATION as f64;
+
+    // By that way, we can calculate the epoch duration in one block
+    (EPOCH_DURATION_IN_BLOCKS as f64 * SLOT_FILL_RATE) as u64
 };
 
-const EpochDuration : u64 = EPOCH_DURATION_IN_BLOCKS;
-const ExpectedBlockTime : u64 = MILLISECS_PER_BLOCK;
+parameter_types! {
+	const EpochDuration : u64 = EPOCH_DURATION_IN_BLOCKS;
+	const ExpectedBlockTime : u64 = MILLISECS_PER_BLOCK;
+	pub const ReportLongevity: u64 = 24 * 28 * 6 * EpochDuration::get();
+}
 
 impl pallet_babe::Config for Runtime {
     type EpochDuration = EpochDuration;
@@ -88,12 +95,73 @@ impl<T: Config> frame_support::traits::DisabledValidators for Pallet<T> {
  	- ["In substrate, what is the equivocation handling system and KeyOwnerProof/Identification/ProofSystem in babe config?"](https://stackoverflow.com/questions/71004838/in-substrate-what-is-the-equivocation-handling-system-and-keyownerproof-identif)
 
 We got that the `KeyOwnerProofSystem` is a system that when we need to provide a [EquivocationProof](https://docs.rs/sp-consensus-slots/latest/sp_consensus_slots/struct.EquivocationProof.html) to the Runtime for checking if the equivocation happens.
-> ANSWER: Let's say you have found an equivocation for Babe. Aka you are saying that Alice build two blocks on the same height in session 100. You will now need to prove to the runtime that there is an equivocation. You send the proof to the runtime. While the runtime checks the proof, it needs to ensure that Alice is really part of the validator set in session 100. This check is done using the KeyProofSystem. In case of `pallet_session::historical`, _it records all the validator sets for the last X sessions (can be configured) to prove these kind of requests._
+> ANSWER: Let's say you have found an equivocation for Babe. Aka you are saying that Alice build two blocks on the same height in session 100. You will now need to prove to the runtime that there is an equivocation. You send the proof to the runtime. While the runtime checks the proof, it needs to ensure that Alice is really part of the validator set in session 100. This check is done using the KeyProofSystem. In case of `pallet_session::historical`, _it records all the validator sets for the last X sessions (can be configured) to prove these kind of requests_.
+
+There is a better explanation of the equivocation in the below section about the type parameter `EquivocationReportSystem`.
 
 ```rust
 type KeyOwnerProof = <Historical as KeyOwnerProofSystem<(KeyTypeId, pallet_babe::AuthorityId)>>::Proof;
 ```
-From that information, we can explain this type parameter is to declare the type of `Proof` coming from a `KeyOwnerProofSystem` of the `pallet_session::historical::{Pallet}` which records all the validator sets of the last X sessions, validators are indentified using the `pallet_babe::AuthorityId`.
+The proof of key ownership, used for validating equivocation reports. The proof must include the session index and validator count of the session at which the equivocation occurred. From that information, we can explain this type parameter is to declare the type of `Proof` coming from a `KeyOwnerProofSystem` of the `pallet_session::historical::{Pallet}` which records all the validator sets of the last X sessions, validators are indentified using the `pallet_babe::AuthorityId`.
 
+- [`EquivocationReportSystem`](https://paritytech.github.io/polkadot-sdk/master/src/pallet_babe/lib.rs.html#168-171): The equivocation handling subsystem, defines methods to check/report an offence and for submitting a transaction to report an equivocation (from an offchain context). Learn more about [Validator Equivocation](https://wiki.polkadot.network/docs/maintain-guides-avoid-slashing#equivocation).
+	- BABE equivocation: Equivocation events can occur when a validator produces two or more of the same block; under this condition.
+ 	- GRANDPA Equivocation: Equivocation may also happen when a validator signs two or more of the same consensus vote; under this condition.
+In our case, it is `BABE equivocation`
+```
+type EquivocationReportSystem = pallet_babe::EquivocationReportSystem<Self, Offences, Historical, ReportLongevity>;
+```
+The implementation for the `EquivocationReportSystem` in `BABE` can be found in [polkadot-sdk/substrate/frame/babe/src/equivocation.rs](https://github.com/paritytech/polkadot-sdk/blob/master/substrate/frame/babe/src/equivocation.rs#L124). Read more about the function signatures and type declaration of [`OffenceReportSystem`](https://docs.rs/sp-staking/latest/src/sp_staking/offence.rs.html#18-276)
+
+```rust
+/// BABE equivocation offence report system.
+///
+/// This type implements `OffenceReportSystem` such that:
+/// - Equivocation reports are published on-chain as unsigned extrinsic via
+///   `offchain::SendTransactionTypes`.
+/// - On-chain validity checks and processing are mostly delegated to the user provided generic
+///   types implementing `KeyOwnerProofSystem` and `ReportOffence` traits.
+/// - Offence reporter for unsigned transactions is fetched via the the authorship pallet.
+pub struct EquivocationReportSystem<T, R, P, L>(sp_std::marker::PhantomData<(T, R, P, L)>);
+
+impl<T, R, P, L>
+	OffenceReportSystem<Option<T::AccountId>, (EquivocationProof<HeaderFor<T>>, T::KeyOwnerProof)>
+	for EquivocationReportSystem<T, R, P, L>
+where
+	T: Config + pallet_authorship::Config + frame_system::offchain::SendTransactionTypes<Call<T>>,
+	R: ReportOffence<
+		T::AccountId,
+		P::IdentificationTuple,
+		EquivocationOffence<P::IdentificationTuple>,
+	>,
+	P: KeyOwnerProofSystem<(KeyTypeId, AuthorityId), Proof = T::KeyOwnerProof>,
+	P::IdentificationTuple: Clone,
+	L: Get<u64>,
+{
+	type Longevity = L;
+
+	fn publish_evidence(
+		evidence: (EquivocationProof<HeaderFor<T>>, T::KeyOwnerProof),
+	) -> Result<(), ()> {...}
+
+	fn check_evidence(
+		evidence: (EquivocationProof<HeaderFor<T>>, T::KeyOwnerProof),
+	) -> Result<(), TransactionValidityError> {...}
+
+	fn process_evidence(
+		reporter: Option<T::AccountId>,
+		evidence: (EquivocationProof<HeaderFor<T>>, T::KeyOwnerProof),
+	) -> Result<(), DispatchError> {...}
+}
+```
+
+There are three other type that requires a further explanation `Offences, Historical, ReportLongevity`
+- [`Offences`](https://docs.rs/pallet-offences/latest/src/pallet_offences/lib.rs.html#51): This pallet simply defined storage value and Pallet dispatchable functions to store and track the reported offences. 
+- [`Historical`](https://docs.rs/pallet-session/latest/pallet_session/historical/index.html): An opt-in utility for tracking historical sessions in FRAME-session. Rather than store the full session data for any given session, we instead **commit to the roots of merkle tries containing the session data**. These **roots and proofs of inclusion can be generated at any time during the current session**. Afterwards, **the proofs can be fed to a consensus module when reporting misbehavior**.
+- `ReportLongevity`: A constant variable defines the lifetime of the report (longevity), request by the `OffenceReportSystem ( type Longevity = Get<u64> )`
+```rs
+pub const ReportLongevity: u64 = 24 * 28 * 6 * EpochDuration::get();
+```
 ## Ressource
-- https://zhuanlan.zhihu.com/p/161293660
+- Substrate NPOS implementation guide - Chinese version: https://zhuanlan.zhihu.com/p/161293660
+- Advanced Staking Concepts on Polkadot Wiki: https://wiki.polkadot.network/docs/learn-staking-advanced
