@@ -19,6 +19,28 @@ Before we implement the NPOS (Nominated Proof of Stake) which is PoS (Proof of S
 - Substrate's implementation of BABE also has a **fallback mechanism for when no authorities are chosen in a given slot**. These **secondary slot** assignments allow BABE to achieve a constant block time.
 
 ### Code Breakdown
+Before diving deeper, here are pallets that we will add at this stage: 
+```toml
+pallet-babe = { version = "31.0.0", default-features = false }
+pallet-offences = { version = "31.0.0", default-features = false }
+
+[features]
+std=[
+	"pallet-babe/std",
+	"pallet-session/std",
+	"pallet-offences/std",
+]
+```
+The use of each pallet is described below. We also need to add these pallet in the `construct_runtime!` macro:
+```rust
+construct_runtime! {
+	...,
+	// NPOS relevant pallets
+	Babe: pallet_babe = 34,
+        Historical: pallet_session::historical::{Pallet} = 35,
+        Offences: pallet_offences = 36,
+}
+```
 Read more about [the configuration of BABE pallet.](https://paritytech.github.io/polkadot-sdk/master/pallet_babe/pallet/trait.Config.html)
 ```rust
 pub const MILLISECS_PER_BLOCK: Moment = 3000;
