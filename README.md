@@ -8,7 +8,7 @@ You can learn more about `pop-cli` here: https://github.com/r0gue-io/pop-cli
 - Run your local relaychain network using Zombinet with `pop up parachain -f ./zombienet.toml`
 Now you are ready to kickstart working on the later steps.
 
-## Step 1: Migrate the Block Production algorithm (AURA -> BABE)
+## Migrate the Block Production algorithm (AURA -> BABE)
 Before we implement the NPOS (Nominated Proof of Stake) which is PoS (Proof of Stake) with the nomination mechanism, we will work on migrate the Substrate node template from its base consensus mechanism PoA to PoS first. Below are steps to migrate the Substrate-based chain template to the PoS blockchain.
 - To read more about the consensus in blockchain and Polkadot, [visit the official Substrate documentation](https://docs.substrate.io/learn/consensus/) or on [Polkadot Wiki - Learn Consensus](https://wiki.polkadot.network/docs/learn-consensus)
 
@@ -192,6 +192,21 @@ There are three other type that requires a further explanation `Offences, Histor
 ```rs
 pub const ReportLongevity: u64 = 24 * 28 * 6 * EpochDuration::get();
 ```
+## Define transaction type for the Runtime
+A definition of types required to submit transactions from within the runtime. [`UnCheckedExtrinsic`](https://paritytech.github.io/substrate/master/sp_runtime/generic/struct.UncheckedExtrinsic.html) is an extrinsic right from the external world. This is unchecked and so can contain a signature. More information and examples for the `SendTransactionTypes` can be found in [Add offchain worker - Substrate official documentation](https://docs.substrate.io/tutorials/build-application-logic/add-offchain-workers/).
+```rust
+// https://crates.parity.io/frame_system/offchain/trait.SendTransactionTypes.html
+impl<C> frame_system::offchain::SendTransactionTypes<C> for Runtime
+where
+    RuntimeCall: From<C>,
+{
+    // The runtime expects the UncheckedExtrinsic type
+    // https://paritytech.github.io/substrate/master/sp_runtime/generic/struct.UncheckedExtrinsic.html
+    type Extrinsic = UncheckedExtrinsic;
+    type OverarchingCall = RuntimeCall;
+}
+```
+
 ## Ressource
 - Substrate NPOS implementation guide - Chinese version: https://zhuanlan.zhihu.com/p/161293660
 - Advanced Staking Concepts on Polkadot Wiki: https://wiki.polkadot.network/docs/learn-staking-advanced
