@@ -1,5 +1,5 @@
 use cumulus_primitives_core::ParaId;
-use parachain_template_runtime::{AccountId, AuraId, Signature, EXISTENTIAL_DEPOSIT};
+use parachain_template_runtime::{AccountId, AuraId, BabeId, Signature, EXISTENTIAL_DEPOSIT};
 use sc_chain_spec::{ChainSpecExtension, ChainSpecGroup};
 use sc_service::ChainType;
 use serde::{Deserialize, Serialize};
@@ -41,8 +41,8 @@ type AccountPublic = <Signature as Verify>::Signer;
 /// Generate collator keys from seed.
 ///
 /// This function's return type must always match the session keys of the chain in tuple format.
-pub fn get_collator_keys_from_seed(seed: &str) -> AuraId {
-    get_from_seed::<AuraId>(seed)
+pub fn get_collator_keys_from_seed<TPublic: Public>(seed: &str) -> <TPublic::Pair as Pair>::Public {
+    get_from_seed::<TPublic>(seed)
 }
 
 /// Helper function to generate an account ID from seed
@@ -56,8 +56,11 @@ where
 /// Generate the session keys from individual elements.
 ///
 /// The input must be a tuple of individual keys (a single arg for now since we have just one key).
-pub fn template_session_keys(keys: AuraId) -> parachain_template_runtime::SessionKeys {
-    parachain_template_runtime::SessionKeys { aura: keys }
+pub fn template_session_keys(
+    aura: AuraId,
+    babe: BabeId,
+) -> parachain_template_runtime::SessionKeys {
+    parachain_template_runtime::SessionKeys { aura, babe }
 }
 
 pub fn development_config() -> ChainSpec {
@@ -84,11 +87,13 @@ pub fn development_config() -> ChainSpec {
         vec![
             (
                 get_account_id_from_seed::<sr25519::Public>("Alice"),
-                get_collator_keys_from_seed("Alice"),
+                get_collator_keys_from_seed::<AuraId>("Alice"),
+                get_collator_keys_from_seed::<BabeId>("Alice"),
             ),
             (
                 get_account_id_from_seed::<sr25519::Public>("Bob"),
-                get_collator_keys_from_seed("Bob"),
+                get_collator_keys_from_seed::<AuraId>("Bob"),
+                get_collator_keys_from_seed::<BabeId>("Bob"),
             ),
         ],
         vec![
@@ -136,11 +141,13 @@ pub fn local_testnet_config() -> ChainSpec {
         vec![
             (
                 get_account_id_from_seed::<sr25519::Public>("Alice"),
-                get_collator_keys_from_seed("Alice"),
+                get_collator_keys_from_seed::<AuraId>("Alice"),
+                get_collator_keys_from_seed::<BabeId>("Alice"),
             ),
             (
                 get_account_id_from_seed::<sr25519::Public>("Bob"),
-                get_collator_keys_from_seed("Bob"),
+                get_collator_keys_from_seed::<AuraId>("Bob"),
+                get_collator_keys_from_seed::<BabeId>("Bob"),
             ),
         ],
         vec![
@@ -166,7 +173,7 @@ pub fn local_testnet_config() -> ChainSpec {
 }
 
 fn testnet_genesis(
-    invulnerables: Vec<(AccountId, AuraId)>,
+    invulnerables: Vec<(AccountId, AuraId, BabeId)>,
     endowed_accounts: Vec<AccountId>,
     root: AccountId,
     id: ParaId,
@@ -179,17 +186,17 @@ fn testnet_genesis(
             "parachainId": id,
         },
         "collatorSelection": {
-            "invulnerables": invulnerables.iter().cloned().map(|(acc, _)| acc).collect::<Vec<_>>(),
+            "invulnerables": invulnerables.iter().cloned().map(|(acc, _collator_aura, _collator_babe)| acc).collect::<Vec<_>>(),
             "candidacyBond": EXISTENTIAL_DEPOSIT * 16,
         },
         "session": {
             "keys": invulnerables
                 .into_iter()
-                .map(|(acc, aura)| {
+                .map(|x| {
                     (
-                        acc.clone(),                 // account id
-                        acc,                         // validator id
-                        template_session_keys(aura), // session keys
+                        x.0.clone(),                 // account id
+                        x.0.clone(),                 // validator id
+                        template_session_keys(x.1.clone(), x.2.clone()), // session keys
                     )
                 })
             .collect::<Vec<_>>(),
