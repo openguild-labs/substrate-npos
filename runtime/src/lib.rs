@@ -639,7 +639,15 @@ impl_runtime_apis! {
 
     impl sp_consensus_babe::BabeApi<Block> for Runtime {
         fn configuration() -> sp_consensus_babe::BabeConfiguration {
-            unimplemented!();
+            // Some parameters are configured by us on the type parameter level of the BABE palelt
+            sp_consensus_babe::BabeConfiguration { 
+                slot_duration: Babe::slot_duration(), 
+                epoch_length: EpochDuration::get(), 
+                c: PRIMARY_PROBABILITY, 
+                authorities: Babe::authorities().into_inner(), 
+                randomness: Babe::randomness(), 
+                allowed_slots: sp_consensus_babe::AllowedSlots::PrimaryAndSecondaryPlainSlots 
+            }
         }
 
         fn current_epoch_start() -> sp_consensus_babe::Slot {
