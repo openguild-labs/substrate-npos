@@ -1,5 +1,5 @@
 use cumulus_primitives_core::ParaId;
-use parachain_template_runtime::{AccountId, AuraId, BabeId, Signature, EXISTENTIAL_DEPOSIT};
+use parachain_template_runtime::{AccountId, BabeId, Signature, EXISTENTIAL_DEPOSIT};
 use sc_chain_spec::{ChainSpecExtension, ChainSpecGroup};
 use sc_service::ChainType;
 use serde::{Deserialize, Serialize};
@@ -56,11 +56,8 @@ where
 /// Generate the session keys from individual elements.
 ///
 /// The input must be a tuple of individual keys (a single arg for now since we have just one key).
-pub fn template_session_keys(
-    aura: AuraId,
-    babe: BabeId,
-) -> parachain_template_runtime::SessionKeys {
-    parachain_template_runtime::SessionKeys { aura, babe }
+pub fn template_session_keys(babe: BabeId) -> parachain_template_runtime::SessionKeys {
+    parachain_template_runtime::SessionKeys { babe }
 }
 
 pub fn development_config() -> ChainSpec {
@@ -87,12 +84,10 @@ pub fn development_config() -> ChainSpec {
         vec![
             (
                 get_account_id_from_seed::<sr25519::Public>("Alice"),
-                get_collator_keys_from_seed::<AuraId>("Alice"),
                 get_collator_keys_from_seed::<BabeId>("Alice"),
             ),
             (
                 get_account_id_from_seed::<sr25519::Public>("Bob"),
-                get_collator_keys_from_seed::<AuraId>("Bob"),
                 get_collator_keys_from_seed::<BabeId>("Bob"),
             ),
         ],
@@ -141,12 +136,10 @@ pub fn local_testnet_config() -> ChainSpec {
         vec![
             (
                 get_account_id_from_seed::<sr25519::Public>("Alice"),
-                get_collator_keys_from_seed::<AuraId>("Alice"),
                 get_collator_keys_from_seed::<BabeId>("Alice"),
             ),
             (
                 get_account_id_from_seed::<sr25519::Public>("Bob"),
-                get_collator_keys_from_seed::<AuraId>("Bob"),
                 get_collator_keys_from_seed::<BabeId>("Bob"),
             ),
         ],
@@ -173,7 +166,7 @@ pub fn local_testnet_config() -> ChainSpec {
 }
 
 fn testnet_genesis(
-    invulnerables: Vec<(AccountId, AuraId, BabeId)>,
+    invulnerables: Vec<(AccountId, BabeId)>,
     endowed_accounts: Vec<AccountId>,
     root: AccountId,
     id: ParaId,
@@ -186,7 +179,7 @@ fn testnet_genesis(
             "parachainId": id,
         },
         "collatorSelection": {
-            "invulnerables": invulnerables.iter().cloned().map(|(acc, _collator_aura, _collator_babe)| acc).collect::<Vec<_>>(),
+            "invulnerables": invulnerables.iter().cloned().map(|(acc, _collator_babe)| acc).collect::<Vec<_>>(),
             "candidacyBond": EXISTENTIAL_DEPOSIT * 16,
         },
         "session": {
@@ -196,7 +189,7 @@ fn testnet_genesis(
                     (
                         x.0.clone(),                 // account id
                         x.0.clone(),                 // validator id
-                        template_session_keys(x.1.clone(), x.2.clone()), // session keys
+                        template_session_keys(x.1.clone()), // session keys
                     )
                 })
             .collect::<Vec<_>>(),
