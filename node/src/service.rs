@@ -1,43 +1,39 @@
 //! Service and ServiceFactory implementation. Specialized wrapper over substrate service.
 
 // std
+use sc_client_api::{Backend, BlockBackend};
 use std::{sync::Arc, time::Duration};
 
 use cumulus_client_cli::CollatorOptions;
 // Local Runtime Types
-use parachain_template_runtime::{
-    opaque::{Block, Hash},
-    RuntimeApi,
-};
-
+use parachain_template_runtime::{opaque::Block, RuntimeApi};
 // Cumulus Imports
-use cumulus_client_collator::service::CollatorService;
+// use cumulus_client_collator::service::CollatorService;
 use cumulus_client_consensus_common::ParachainBlockImport as TParachainBlockImport;
-use cumulus_client_consensus_proposer::Proposer;
+// use cumulus_client_consensus_proposer::Proposer;
 use cumulus_client_service::{
     build_network, build_relay_chain_interface, prepare_node_config, start_relay_chain_tasks,
     BuildNetworkParams, CollatorSybilResistance, DARecoveryProfile, StartRelayChainTasksParams,
 };
-use cumulus_primitives_core::{
-    relay_chain::{CollatorPair, ValidationCode},
-    ParaId,
-};
-use cumulus_relay_chain_interface::{OverseerHandle, RelayChainInterface};
+use cumulus_primitives_core::ParaId;
+use cumulus_relay_chain_interface::RelayChainInterface;
+use sc_transaction_pool_api::{OffchainTransactionPoolFactory, RejectAllTxPool};
 
 // Substrate Imports
+use crate::rpc::{create_full, BabeDeps, FullDeps, GrandpaDeps};
 use frame_benchmarking_cli::SUBSTRATE_REFERENCE_HARDWARE;
-use sc_client_api::Backend;
 use sc_consensus::ImportQueue;
+use sc_consensus_babe::SlotProportion;
 use sc_executor::{
     HeapAllocStrategy, NativeElseWasmExecutor, WasmExecutor, DEFAULT_HEAP_ALLOC_STRATEGY,
 };
 use sc_network::NetworkBlock;
-use sc_network_sync::SyncingService;
 use sc_service::{Configuration, PartialComponents, TFullBackend, TFullClient, TaskManager};
-use sc_telemetry::{Telemetry, TelemetryHandle, TelemetryWorker, TelemetryWorkerHandle};
-use sc_transaction_pool_api::OffchainTransactionPoolFactory;
-use sp_keystore::KeystorePtr;
-use substrate_prometheus_endpoint::Registry;
+use sc_telemetry::{Telemetry, TelemetryWorker, TelemetryWorkerHandle};
+
+/// The minimum period of blocks on which justifications will be
+/// imported and generated.
+const GRANDPA_JUSTIFICATION_PERIOD: u32 = 512;
 
 /// Native executor type.
 pub struct ParachainNativeExecutor;
@@ -57,23 +53,41 @@ impl sc_executor::NativeExecutionDispatch for ParachainNativeExecutor {
     }
 }
 
+/// Parachain Related Networking Services
 type ParachainExecutor = NativeElseWasmExecutor<ParachainNativeExecutor>;
-
 type ParachainClient = TFullClient<Block, RuntimeApi, ParachainExecutor>;
-
 type ParachainBackend = TFullBackend<Block>;
-
 type ParachainBlockImport = TParachainBlockImport<Block, Arc<ParachainClient>, ParachainBackend>;
+type FullSelectChain = sc_consensus::LongestChain<ParachainBackend, Block>;
+/// The transaction pool type defintion.
+pub type TransactionPool = sc_transaction_pool::FullPool<Block, ParachainClient>;
+type FullGrandpaBlockImport = sc_consensus_grandpa::GrandpaBlockImport<
+    ParachainBackend,
+    Block,
+    ParachainClient,
+    FullSelectChain,
+>;
+type FullBabeBlockImport =
+    sc_consensus_babe::BabeBlockImport<Block, ParachainClient, FullGrandpaBlockImport>;
+// Link between the block importer and the background voter.
+type FullGrandpaLink = sc_consensus_grandpa::LinkHalf<Block, ParachainClient, FullSelectChain>;
+// Shared voter state for querying.
+type FullGrandpaSharedVoterState = sc_consensus_grandpa::SharedVoterState;
+// State that must be shared between the import queue and the authoring logic.
+type FullBabeLink = sc_consensus_babe::BabeLink<Block>;
 
 /// Assembly of PartialComponents (enough to run chain ops subcommands)
-pub type Service = PartialComponents<
+pub type Service<TRpcBuilder> = PartialComponents<
     ParachainClient,
     ParachainBackend,
-    (),
+    FullSelectChain,
     sc_consensus::DefaultImportQueue<Block>,
     sc_transaction_pool::FullPool<Block, ParachainClient>,
     (
         ParachainBlockImport,
+        TRpcBuilder,
+        (FullBabeBlockImport, FullGrandpaLink, FullBabeLink),
+        FullGrandpaSharedVoterState,
         Option<Telemetry>,
         Option<TelemetryWorkerHandle>,
     ),
@@ -83,7 +97,17 @@ pub type Service = PartialComponents<
 ///
 /// Use this macro if you don't actually need the full service, but just the builder in order to
 /// be able to perform chain operations.
-pub fn new_partial(config: &Configuration) -> Result<Service, sc_service::Error> {
+pub fn new_partial(
+    config: &Configuration,
+) -> Result<
+    Service<
+        impl Fn(
+            sc_rpc::DenyUnsafe,
+            sc_rpc::SubscriptionTaskExecutor,
+        ) -> Result<jsonrpsee::RpcModule<()>, sc_service::Error>,
+    >,
+    sc_service::Error,
+> {
     let telemetry = config
         .telemetry_endpoints
         .clone()
@@ -120,6 +144,8 @@ pub fn new_partial(config: &Configuration) -> Result<Service, sc_service::Error>
         )?;
     let client = Arc::new(client);
 
+    let select_chain = sc_consensus::LongestChain::new(backend.clone());
+
     let telemetry_worker_handle = telemetry.as_ref().map(|(worker, _)| worker.handle());
 
     let telemetry = telemetry.map(|(worker, telemetry)| {
@@ -139,13 +165,94 @@ pub fn new_partial(config: &Configuration) -> Result<Service, sc_service::Error>
 
     let block_import = ParachainBlockImport::new(client.clone(), backend.clone());
 
-    let import_queue = build_import_queue(
+    let (grandpa_block_import, grandpa_link) = sc_consensus_grandpa::block_import(
         client.clone(),
-        block_import.clone(),
-        config,
-        telemetry.as_ref().map(|telemetry| telemetry.handle()),
-        &task_manager,
+        GRANDPA_JUSTIFICATION_PERIOD,
+        &(client.clone() as Arc<_>),
+        select_chain.clone(),
+        telemetry.as_ref().map(|x| x.handle()),
     )?;
+    let justification_import = grandpa_block_import.clone();
+
+    let (babe_block_import, babe_link) = sc_consensus_babe::block_import(
+        sc_consensus_babe::configuration(&*client)?,
+        grandpa_block_import,
+        client.clone(),
+    )?;
+
+    let slot_duration = babe_link.config().slot_duration();
+
+    let babe_import_queue_params = sc_consensus_babe::ImportQueueParams {
+        link: babe_link.clone(),
+        block_import: babe_block_import.clone(),
+        justification_import: Some(Box::new(justification_import)),
+        client: client.clone(),
+        select_chain: select_chain.clone(),
+        create_inherent_data_providers: move |_, ()| async move {
+            let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
+
+            let slot =
+				sp_consensus_babe::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
+					*timestamp,
+					slot_duration,
+				);
+
+            Ok((slot, timestamp))
+        },
+        spawner: &task_manager.spawn_essential_handle(),
+        registry: config.prometheus_registry(),
+        telemetry: telemetry.as_ref().map(|x| x.handle()),
+        offchain_tx_pool_factory: OffchainTransactionPoolFactory::new(RejectAllTxPool::default()),
+    };
+
+    let (import_queue, babe_worker_handle) =
+        sc_consensus_babe::import_queue(babe_import_queue_params)?;
+
+    let import_setup = (babe_block_import, grandpa_link, babe_link);
+    let (rpc_extensions_builder, rpc_setup) = {
+        let (_, grandpa_link, _babe_link) = &import_setup;
+
+        let justification_stream = grandpa_link.justification_stream();
+        let shared_authority_set = grandpa_link.shared_authority_set().clone();
+        let shared_voter_state = sc_consensus_grandpa::SharedVoterState::empty();
+        let shared_voter_state2 = shared_voter_state.clone();
+
+        let finality_proof_provider = sc_consensus_grandpa::FinalityProofProvider::new_for_service(
+            backend.clone(),
+            Some(shared_authority_set.clone()),
+        );
+
+        let client = client.clone();
+        let pool = transaction_pool.clone();
+        let select_chain = select_chain.clone();
+        let keystore = keystore_container.keystore();
+        let chain_spec = config.chain_spec.cloned_box();
+
+        let rpc_extensions_builder = move |deny_unsafe, subscription_executor| {
+            let deps = FullDeps {
+                client: client.clone(),
+                pool: pool.clone(),
+                select_chain: select_chain.clone(),
+                chain_spec: chain_spec.cloned_box(),
+                deny_unsafe,
+                babe: BabeDeps {
+                    babe_worker_handle: babe_worker_handle.clone(),
+                    keystore: keystore.clone(),
+                },
+                grandpa: GrandpaDeps {
+                    shared_voter_state: shared_voter_state.clone(),
+                    shared_authority_set: shared_authority_set.clone(),
+                    justification_stream: justification_stream.clone(),
+                    subscription_executor,
+                    finality_provider: finality_proof_provider.clone(),
+                },
+            };
+
+            create_full(deps).map_err(Into::into)
+        };
+
+        (rpc_extensions_builder, shared_voter_state2)
+    };
 
     Ok(PartialComponents {
         backend,
@@ -154,8 +261,15 @@ pub fn new_partial(config: &Configuration) -> Result<Service, sc_service::Error>
         keystore_container,
         task_manager,
         transaction_pool,
-        select_chain: (),
-        other: (block_import, telemetry, telemetry_worker_handle),
+        select_chain,
+        other: (
+            block_import,
+            rpc_extensions_builder,
+            import_setup,
+            rpc_setup,
+            telemetry,
+            telemetry_worker_handle,
+        ),
     })
 }
 
@@ -173,14 +287,44 @@ async fn start_node_impl(
     let parachain_config = prepare_node_config(parachain_config);
 
     let params = new_partial(&parachain_config)?;
-    let (block_import, mut telemetry, telemetry_worker_handle) = params.other;
-    let net_config = sc_network::config::FullNetworkConfiguration::new(&parachain_config.network);
-
     let client = params.client.clone();
     let backend = params.backend.clone();
+    let (
+        _block_import,
+        rpc_extensions_builder,
+        import_setup,
+        rpc_setup,
+        mut telemetry,
+        telemetry_worker_handle,
+    ) = params.other;
     let mut task_manager = params.task_manager;
+    let select_chain = params.select_chain;
 
-    let (relay_chain_interface, collator_key) = build_relay_chain_interface(
+    let mut net_config =
+        sc_network::config::FullNetworkConfiguration::new(&parachain_config.network);
+
+    let shared_voter_state = rpc_setup.clone();
+    let genesis_hash = client
+        .block_hash(0)
+        .ok()
+        .flatten()
+        .expect("Genesis block exists; qed");
+    let grandpa_protocol_name =
+        sc_consensus_grandpa::protocol_standard_name(&genesis_hash, &parachain_config.chain_spec);
+
+    let (grandpa_protocol_config, grandpa_notification_service) =
+        sc_consensus_grandpa::grandpa_peers_set_config(grandpa_protocol_name.clone());
+
+    net_config.add_notification_protocol(grandpa_protocol_config);
+
+    // There is no such fied warp sync in the cumulus network service
+    let _warp_sync = Arc::new(sc_consensus_grandpa::warp_proof::NetworkProvider::new(
+        backend.clone(),
+        import_setup.1.shared_authority_set().clone(),
+        Vec::default(),
+    ));
+
+    let (relay_chain_interface, _collator_key) = build_relay_chain_interface(
         polkadot_config,
         &parachain_config,
         telemetry_worker_handle,
@@ -191,6 +335,12 @@ async fn start_node_impl(
     .await
     .map_err(|e| sc_service::Error::Application(Box::new(e) as Box<_>))?;
 
+    let role = parachain_config.role.clone();
+    let force_authoring = parachain_config.force_authoring;
+    let backoff_authoring_blocks =
+        Some(sc_consensus_slots::BackoffAuthoringOnFinalizedHeadLagging::default());
+    let name = parachain_config.network.node_name.clone();
+    let enable_grandpa = !parachain_config.disable_grandpa;
     let validator = parachain_config.role.is_authority();
     let prometheus_registry = parachain_config.prometheus_registry().cloned();
     let transaction_pool = params.transaction_pool.clone();
@@ -233,23 +383,8 @@ async fn start_node_impl(
         );
     }
 
-    let rpc_builder = {
-        let client = client.clone();
-        let transaction_pool = transaction_pool.clone();
-
-        Box::new(move |deny_unsafe, _| {
-            let deps = crate::rpc::FullDeps {
-                client: client.clone(),
-                pool: transaction_pool.clone(),
-                deny_unsafe,
-            };
-
-            crate::rpc::create_full(deps).map_err(Into::into)
-        })
-    };
-
     sc_service::spawn_tasks(sc_service::SpawnTasksParams {
-        rpc_builder,
+        rpc_builder: Box::new(rpc_extensions_builder),
         client: client.clone(),
         transaction_pool: transaction_pool.clone(),
         task_manager: &mut task_manager,
@@ -262,6 +397,112 @@ async fn start_node_impl(
         tx_handler_controller,
         telemetry: telemetry.as_mut(),
     })?;
+
+    let (babe_block_import, grandpa_link, babe_link) = import_setup;
+
+    if let sc_service::config::Role::Authority { .. } = &role {
+        let proposer = sc_basic_authorship::ProposerFactory::new(
+            task_manager.spawn_handle(),
+            client.clone(),
+            transaction_pool.clone(),
+            prometheus_registry.as_ref(),
+            telemetry.as_ref().map(|x| x.handle()),
+        );
+
+        let client_clone = client.clone();
+        let slot_duration = babe_link.config().slot_duration();
+        let babe_config = sc_consensus_babe::BabeParams {
+            keystore: params.keystore_container.keystore(),
+            client: client.clone(),
+            select_chain,
+            env: proposer,
+            block_import: babe_block_import,
+            sync_oracle: sync_service.clone(),
+            justification_sync_link: sync_service.clone(),
+            create_inherent_data_providers: move |parent, ()| {
+                let client_clone = client_clone.clone();
+                async move {
+                    let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
+
+                    let slot =
+						sp_consensus_babe::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
+							*timestamp,
+							slot_duration,
+						);
+
+                    let storage_proof =
+                        sp_transaction_storage_proof::registration::new_data_provider(
+                            &*client_clone,
+                            &parent,
+                        )?;
+
+                    Ok((slot, timestamp, storage_proof))
+                }
+            },
+            force_authoring,
+            backoff_authoring_blocks,
+            babe_link,
+            block_proposal_slot_portion: SlotProportion::new(0.5),
+            max_block_proposal_slot_portion: None,
+            telemetry: telemetry.as_ref().map(|x| x.handle()),
+        };
+
+        let babe = sc_consensus_babe::start_babe(babe_config)?;
+        task_manager.spawn_essential_handle().spawn_blocking(
+            "babe-proposer",
+            Some("block-authoring"),
+            babe,
+        );
+    }
+
+    // if the node isn't actively participating in consensus then it doesn't
+    // need a keystore, regardless of which protocol we use below.
+    let keystore = if role.is_authority() {
+        Some(params.keystore_container.keystore())
+    } else {
+        None
+    };
+
+    let config = sc_consensus_grandpa::Config {
+        // FIXME #1578 make this available through chainspec
+        gossip_duration: std::time::Duration::from_millis(333),
+        justification_generation_period: 512,
+        name: Some(name),
+        observer_enabled: false,
+        keystore,
+        local_role: role,
+        telemetry: telemetry.as_ref().map(|x| x.handle()),
+        protocol_name: grandpa_protocol_name,
+    };
+
+    if enable_grandpa {
+        // start the full GRANDPA voter
+        // NOTE: non-authorities could run the GRANDPA observer protocol, but at
+        // this point the full voter should provide better guarantees of block
+        // and vote data availability than the observer. The observer has not
+        // been tested extensively yet and having most nodes in a network run it
+        // could lead to finality stalls.
+        let grandpa_config = sc_consensus_grandpa::GrandpaParams {
+            config,
+            link: grandpa_link,
+            network: network.clone(),
+            sync: Arc::new(sync_service.clone()),
+            telemetry: telemetry.as_ref().map(|x| x.handle()),
+            voting_rule: sc_consensus_grandpa::VotingRulesBuilder::default().build(),
+            prometheus_registry,
+            shared_voter_state,
+            notification_service: grandpa_notification_service,
+            offchain_tx_pool_factory: OffchainTransactionPoolFactory::new(transaction_pool.clone()),
+        };
+
+        // the GRANDPA voter task is considered infallible, i.e.
+        // if it fails we take down the service with it.
+        task_manager.spawn_essential_handle().spawn_blocking(
+            "grandpa-voter",
+            None,
+            sc_consensus_grandpa::run_grandpa_voter(grandpa_config)?,
+        );
+    }
 
     if let Some(hwbench) = hwbench {
         sc_sysinfo::print_hwbench(&hwbench);
@@ -316,135 +557,9 @@ async fn start_node_impl(
         sync_service: sync_service.clone(),
     })?;
 
-    if validator {
-        start_consensus(
-            client.clone(),
-            backend.clone(),
-            block_import,
-            prometheus_registry.as_ref(),
-            telemetry.as_ref().map(|t| t.handle()),
-            &task_manager,
-            relay_chain_interface.clone(),
-            transaction_pool,
-            sync_service.clone(),
-            params.keystore_container.keystore(),
-            relay_chain_slot_duration,
-            para_id,
-            collator_key.expect("Command line arguments do not allow this. qed"),
-            overseer_handle,
-            announce_block,
-        )?;
-    }
-
     start_network.start_network();
 
     Ok((task_manager, client))
-}
-
-/// Build the import queue for the parachain runtime.
-fn build_import_queue(
-    client: Arc<ParachainClient>,
-    block_import: ParachainBlockImport,
-    config: &Configuration,
-    telemetry: Option<TelemetryHandle>,
-    task_manager: &TaskManager,
-) -> Result<sc_consensus::DefaultImportQueue<Block>, sc_service::Error> {
-    let slot_duration = cumulus_client_consensus_aura::slot_duration(&*client)?;
-
-    Ok(
-        cumulus_client_consensus_aura::equivocation_import_queue::fully_verifying_import_queue::<
-            sp_consensus_aura::sr25519::AuthorityPair,
-            _,
-            _,
-            _,
-            _,
-        >(
-            client,
-            block_import,
-            move |_, _| async move {
-                let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
-                Ok(timestamp)
-            },
-            slot_duration,
-            &task_manager.spawn_essential_handle(),
-            config.prometheus_registry(),
-            telemetry,
-        ),
-    )
-}
-
-fn start_consensus(
-    client: Arc<ParachainClient>,
-    backend: Arc<ParachainBackend>,
-    block_import: ParachainBlockImport,
-    prometheus_registry: Option<&Registry>,
-    telemetry: Option<TelemetryHandle>,
-    task_manager: &TaskManager,
-    relay_chain_interface: Arc<dyn RelayChainInterface>,
-    transaction_pool: Arc<sc_transaction_pool::FullPool<Block, ParachainClient>>,
-    sync_oracle: Arc<SyncingService<Block>>,
-    keystore: KeystorePtr,
-    relay_chain_slot_duration: Duration,
-    para_id: ParaId,
-    collator_key: CollatorPair,
-    overseer_handle: OverseerHandle,
-    announce_block: Arc<dyn Fn(Hash, Option<Vec<u8>>) + Send + Sync>,
-) -> Result<(), sc_service::Error> {
-    use cumulus_client_consensus_aura::collators::lookahead::{self as aura, Params as AuraParams};
-
-    // NOTE: because we use Aura here explicitly, we can use `CollatorSybilResistance::Resistant`
-    // when starting the network.
-
-    let proposer_factory = sc_basic_authorship::ProposerFactory::with_proof_recording(
-        task_manager.spawn_handle(),
-        client.clone(),
-        transaction_pool,
-        prometheus_registry,
-        telemetry.clone(),
-    );
-
-    let proposer = Proposer::new(proposer_factory);
-
-    let collator_service = CollatorService::new(
-        client.clone(),
-        Arc::new(task_manager.spawn_handle()),
-        announce_block,
-        client.clone(),
-    );
-
-    let params = AuraParams {
-        create_inherent_data_providers: move |_, ()| async move { Ok(()) },
-        block_import,
-        para_client: client.clone(),
-        para_backend: backend.clone(),
-        relay_client: relay_chain_interface,
-        code_hash_provider: move |block_hash| {
-            client
-                .code_at(block_hash)
-                .ok()
-                .map(|c| ValidationCode::from(c).hash())
-        },
-        sync_oracle,
-        keystore,
-        collator_key,
-        para_id,
-        overseer_handle,
-        relay_chain_slot_duration,
-        proposer,
-        collator_service,
-        authoring_duration: Duration::from_millis(1500),
-        reinitialize: false,
-    };
-
-    let fut =
-        aura::run::<Block, sp_consensus_aura::sr25519::AuthorityPair, _, _, _, _, _, _, _, _, _>(
-            params,
-        );
-    task_manager
-        .spawn_essential_handle()
-        .spawn("aura", None, fut);
-
-    Ok(())
 }
 
 /// Start a parachain node.

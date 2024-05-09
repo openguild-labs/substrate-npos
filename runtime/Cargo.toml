@@ -32,6 +32,7 @@ frame-system-rpc-runtime-api = { workspace = true }
 frame-try-runtime = { workspace = true }
 pallet-aura = { workspace = true }
 pallet-babe = { workspace = true }
+pallet-grandpa = {workspace = true}
 pallet-offences = { workspace = true }
 pallet-authorship = { workspace = true }
 pallet-balances = { workspace = true }
@@ -45,6 +46,7 @@ sp-api = { workspace = true }
 sp-block-builder = { workspace = true }
 sp-consensus-aura = { workspace = true }
 sp-consensus-babe = { workspace = true }
+sp-consensus-grandpa = { workspace = true }
 sp-core = { workspace = true }
 sp-genesis-builder = { workspace = true }
 sp-inherents = { workspace = true }
@@ -100,6 +102,7 @@ std = [
 	"log/std",
 	"pallet-aura/std",
 	"pallet-babe/std",
+	"pallet-grandpa/std",
 	"pallet-session/std",
 	"pallet-offences/std",
 	"pallet-authorship/std",
@@ -168,6 +171,7 @@ try-runtime = [
 	"frame-system/try-runtime",
 	"frame-try-runtime/try-runtime",
 	"pallet-aura/try-runtime",
+	"pallet-grandpa/try-runtime",
 	"pallet-babe/try-runtime",
 	"pallet-session/try-runtime",
 	"pallet-offences/try-runtime",

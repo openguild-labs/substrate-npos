@@ -16,7 +16,7 @@ use sp_api::impl_runtime_apis;
 use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
 use sp_runtime::{
     create_runtime_str, generic, impl_opaque_keys,
-    traits::{BlakeTwo256, Block as BlockT, IdentifyAccount, Verify},
+    traits::{BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, Verify},
     transaction_validity::{TransactionSource, TransactionValidity},
     ApplyExtrinsicResult, MultiSignature,
 };
@@ -33,7 +33,7 @@ use frame_support::{
     genesis_builder_helper::{build_config, create_default_config},
     parameter_types,
     traits::{
-        ConstBool, ConstU32, ConstU64, ConstU8, EitherOfDiverse, KeyOwnerProofSystem,
+        ConstU32, ConstU64, ConstU8, EitherOfDiverse, ExecuteBlock, KeyOwnerProofSystem,
         TransformOrigin,
     },
     weights::{
@@ -48,8 +48,8 @@ use frame_system::{
 };
 use pallet_xcm::{EnsureXcm, IsVoiceOfBody};
 use parachains_common::message_queue::{NarrowOriginToSibling, ParaIdToSibling};
-pub use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 pub use sp_consensus_babe::AuthorityId as BabeId;
+pub use sp_consensus_grandpa::AuthorityId as GrandpaId;
 pub use sp_runtime::{MultiAddress, Perbill, Permill};
 use xcm_config::{RelayLocation, XcmOriginToTransactDispatchOrigin};
 
@@ -178,8 +178,8 @@ pub mod opaque {
 
 impl_opaque_keys! {
     pub struct SessionKeys {
-        pub aura: Aura,
         pub babe: Babe,
+        pub grandpa: Grandpa,
     }
 }
 
@@ -302,6 +302,8 @@ parameter_types! {
     pub const EpochDuration: u64 = EPOCH_DURATION_IN_SLOTS;
     pub const ExpectedBlockTime: u64 = MILLISECS_PER_BLOCK;
     pub const ReportLongevity: u64 = 24 * 28 * 6 * EpochDuration::get();
+    pub const MaxAuthorities: u32 = 100;
+    pub const MaxNominators: u32 = 64;
 
     // This part is copied from Substrate's `bin/node/runtime/src/lib.rs`.
     //  The `RuntimeBlockLength` and `RuntimeBlockWeights` exist here because the
@@ -365,7 +367,7 @@ impl frame_system::Config for Runtime {
 impl pallet_timestamp::Config for Runtime {
     /// A timestamp: milliseconds since the unix epoch.
     type Moment = u64;
-    type OnTimestampSet = Aura;
+    type OnTimestampSet = Babe;
     #[cfg(feature = "experimental")]
     type MinimumPeriod = ConstU64<0>;
     #[cfg(not(feature = "experimental"))]
@@ -374,7 +376,7 @@ impl pallet_timestamp::Config for Runtime {
 }
 
 impl pallet_authorship::Config for Runtime {
-    type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Aura>;
+    type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
     type EventHandler = (CollatorSelection,);
 }
 
@@ -395,12 +397,22 @@ impl pallet_babe::Config for Runtime {
     // Note: DisabledValidators trait is implemented for the pallet_session
     type DisabledValidators = Session;
     type WeightInfo = ();
-    type MaxAuthorities = ConstU32<100>;
-    type MaxNominators = ConstU32<100>;
-    type KeyOwnerProof =
-        <Historical as KeyOwnerProofSystem<(KeyTypeId, pallet_babe::AuthorityId)>>::Proof;
+    type MaxAuthorities = MaxAuthorities;
+    type MaxNominators = MaxNominators;
+    type KeyOwnerProof = <Historical as KeyOwnerProofSystem<(KeyTypeId, BabeId)>>::Proof;
     type EquivocationReportSystem =
         pallet_babe::EquivocationReportSystem<Self, Offences, Historical, ReportLongevity>;
+}
+
+impl pallet_grandpa::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = ();
+    type MaxAuthorities = ConstU32<32>;
+    type MaxNominators = MaxNominators;
+    type MaxSetIdSessionEntries = ConstU64<0>;
+    type KeyOwnerProof = <Historical as KeyOwnerProofSystem<(KeyTypeId, GrandpaId)>>::Proof;
+    type EquivocationReportSystem =
+        pallet_grandpa::EquivocationReportSystem<Self, Offences, Historical, ReportLongevity>;
 }
 
 impl pallet_session::historical::pallet::Config for Runtime {
@@ -452,12 +464,18 @@ parameter_types! {
     pub const RelayOrigin: AggregateMessageOrigin = AggregateMessageOrigin::Parent;
 }
 
-type ConsensusHook = cumulus_pallet_aura_ext::FixedVelocityConsensusHook<
-    Runtime,
-    RELAY_CHAIN_SLOT_DURATION_MILLIS,
-    BLOCK_PROCESSING_VELOCITY,
-    UNINCLUDED_SEGMENT_CAPACITY,
->;
+pub struct PalletBabeConsensusHook {}
+impl cumulus_pallet_parachain_system::ConsensusHook for PalletBabeConsensusHook {
+    fn on_state_proof(
+        state_proof: &cumulus_pallet_parachain_system::relay_state_snapshot::RelayChainStateProof,
+    ) -> (
+        Weight,
+        cumulus_pallet_parachain_system::consensus_hook::UnincludedSegmentCapacity,
+    ) {
+        // TODO: Implement the consensus hook of for the Pallet BABE in cumulus
+        unimplemented!();
+    }
+}
 
 impl cumulus_pallet_parachain_system::Config for Runtime {
     type WeightInfo = ();
@@ -470,7 +488,7 @@ impl cumulus_pallet_parachain_system::Config for Runtime {
     type XcmpMessageHandler = XcmpQueue;
     type ReservedXcmpWeight = ReservedXcmpWeight;
     type CheckAssociatedRelayNumber = RelayNumberMonotonicallyIncreases;
-    type ConsensusHook = ConsensusHook;
+    type ConsensusHook = PalletBabeConsensusHook;
 }
 
 impl parachain_info::Config for Runtime {}
@@ -501,8 +519,6 @@ impl pallet_message_queue::Config for Runtime {
     type ServiceWeight = MessageQueueServiceWeight;
 }
 
-impl cumulus_pallet_aura_ext::Config for Runtime {}
-
 impl cumulus_pallet_xcmp_queue::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type ChannelInfo = ParachainSystem;
@@ -529,19 +545,10 @@ impl pallet_session::Config for Runtime {
     type ShouldEndSession = pallet_session::PeriodicSessions<Period, Offset>;
     type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
     type SessionManager = CollatorSelection;
-    // Essentially just Aura, but let's be pedantic.
+    // Essentially just Babe , but let's be pedantic.
     type SessionHandler = <SessionKeys as sp_runtime::traits::OpaqueKeys>::KeyTypeIdProviders;
     type Keys = SessionKeys;
     type WeightInfo = ();
-}
-
-impl pallet_aura::Config for Runtime {
-    type AuthorityId = AuraId;
-    type DisabledValidators = ();
-    type MaxAuthorities = ConstU32<100_000>;
-    type AllowMultipleBlocksPerSlot = ConstBool<true>;
-    #[cfg(feature = "experimental")]
-    type SlotDuration = ConstU64<SLOT_DURATION>;
 }
 
 parameter_types! {
@@ -593,8 +600,6 @@ construct_runtime!(
         Authorship: pallet_authorship = 20,
         CollatorSelection: pallet_collator_selection = 21,
         Session: pallet_session = 22, // also used in for the staking feature
-        Aura: pallet_aura = 23,
-        AuraExt: cumulus_pallet_aura_ext = 24,
 
         // XCM helpers.
         XcmpQueue: cumulus_pallet_xcmp_queue = 30,
@@ -604,8 +609,9 @@ construct_runtime!(
 
         // NPOS relevant pallets
         Babe: pallet_babe = 34,
-        Historical: pallet_session::historical::{Pallet} = 35,
-        Offences: pallet_offences = 36,
+        Grandpa: pallet_grandpa = 35,
+        Historical: pallet_session::historical::{Pallet} = 36,
+        Offences: pallet_offences = 37,
         // Staking: pallet_staking,
     }
 );
@@ -627,26 +633,16 @@ mod benches {
 }
 
 impl_runtime_apis! {
-    impl sp_consensus_aura::AuraApi<Block, AuraId> for Runtime {
-        fn slot_duration() -> sp_consensus_aura::SlotDuration {
-            sp_consensus_aura::SlotDuration::from_millis(SLOT_DURATION)
-        }
-
-        fn authorities() -> Vec<AuraId> {
-            Aura::authorities().into_inner()
-        }
-    }
-
     impl sp_consensus_babe::BabeApi<Block> for Runtime {
         fn configuration() -> sp_consensus_babe::BabeConfiguration {
             // Some parameters are configured by us on the type parameter level of the BABE palelt
-            sp_consensus_babe::BabeConfiguration { 
-                slot_duration: Babe::slot_duration(), 
-                epoch_length: EpochDuration::get(), 
-                c: PRIMARY_PROBABILITY, 
-                authorities: Babe::authorities().into_inner(), 
-                randomness: Babe::randomness(), 
-                allowed_slots: sp_consensus_babe::AllowedSlots::PrimaryAndSecondaryPlainSlots 
+            sp_consensus_babe::BabeConfiguration {
+                slot_duration: Babe::slot_duration(),
+                epoch_length: EpochDuration::get(),
+                c: PRIMARY_PROBABILITY,
+                authorities: Babe::authorities().into_inner(),
+                randomness: Babe::randomness(),
+                allowed_slots: sp_consensus_babe::AllowedSlots::PrimaryAndSecondaryPlainSlots
             }
         }
 
@@ -674,6 +670,42 @@ impl_runtime_apis! {
             key_owner_proof: sp_consensus_babe::OpaqueKeyOwnershipProof,
         ) -> Option<()> {
             None
+        }
+    }
+
+    impl sp_consensus_grandpa::GrandpaApi<Block> for Runtime {
+        fn grandpa_authorities() -> sp_consensus_grandpa::AuthorityList {
+            Grandpa::grandpa_authorities()
+        }
+
+        fn current_set_id() -> sp_consensus_grandpa::SetId {
+            Grandpa::current_set_id()
+        }
+
+        fn submit_report_equivocation_unsigned_extrinsic(
+            equivocation_proof: sp_consensus_grandpa::EquivocationProof<
+                <Block as BlockT>::Hash,
+                NumberFor<Block>,
+            >,
+            key_owner_proof: sp_consensus_grandpa::OpaqueKeyOwnershipProof,
+        ) -> Option<()> {
+            let key_owner_proof = key_owner_proof.decode()?;
+
+            Grandpa::submit_unsigned_equivocation_report(
+                equivocation_proof,
+                key_owner_proof,
+            )
+        }
+
+        fn generate_key_ownership_proof(
+            _set_id: sp_consensus_grandpa::SetId,
+            authority_id: GrandpaId,
+        ) -> Option<sp_consensus_grandpa::OpaqueKeyOwnershipProof> {
+            use codec::Encode;
+
+            Historical::prove((sp_consensus_grandpa::KEY_TYPE, authority_id))
+                .map(|p| p.encode())
+                .map(sp_consensus_grandpa::OpaqueKeyOwnershipProof::new)
         }
     }
 
@@ -804,15 +836,6 @@ impl_runtime_apis! {
         }
     }
 
-    impl cumulus_primitives_aura::AuraUnincludedSegmentApi<Block> for Runtime {
-        fn can_build_upon(
-            included_hash: <Block as BlockT>::Hash,
-            slot: cumulus_primitives_aura::Slot,
-        ) -> bool {
-            ConsensusHook::can_build_upon(included_hash, slot)
-        }
-    }
-
     impl cumulus_primitives_core::CollectCollationInfo<Block> for Runtime {
         fn collect_collation_info(header: &<Block as BlockT>::Header) -> cumulus_primitives_core::CollationInfo {
             ParachainSystem::collect_collation_info(header)
@@ -899,7 +922,26 @@ impl_runtime_apis! {
     }
 }
 
+/// TODO: Temporarily declare the function signature, need to implement for pallet BABE
+/// The block executor used when validating a PoV at the relay chain.
+///
+/// When executing the block it will verify the block seal to ensure that the correct author created
+/// the block.
+pub struct PalletBabeBlockExecutor<T, I>(sp_std::marker::PhantomData<(T, I)>);
+
+impl<Block, T, I> ExecuteBlock<Block> for PalletBabeBlockExecutor<T, I>
+where
+    Block: BlockT,
+    T: pallet_babe::Config,
+    I: ExecuteBlock<Block>,
+{
+    fn execute_block(block: Block) {
+        let (mut header, extrinsics) = block.deconstruct();
+        unimplemented!();
+    }
+}
+
 cumulus_pallet_parachain_system::register_validate_block! {
     Runtime = Runtime,
-    BlockExecutor = cumulus_pallet_aura_ext::BlockExecutor::<Runtime, Executive>,
+    BlockExecutor = PalletBabeBlockExecutor<Runtime, Executive>,
 }
