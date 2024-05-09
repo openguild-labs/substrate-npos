@@ -31,7 +31,7 @@ fn load_spec(id: &str) -> std::result::Result<Box<dyn ChainSpec>, String> {
 
 impl SubstrateCli for Cli {
     fn impl_name() -> String {
-        "Parachain Collator Template".into()
+        "Substrate NPOS by OpenGuild".into()
     }
 
     fn impl_version() -> String {
