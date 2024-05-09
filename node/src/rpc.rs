@@ -128,7 +128,7 @@ where
     // Add ChainSpec RPC API to the RPC module extension
     module.merge(ChainSpec::new(chain_name, genesis_hash, properties).into_rpc())?;
     module.merge(System::new(client.clone(), pool, deny_unsafe).into_rpc())?;
-    module.merge(TransactionPayment::new(client).into_rpc())?;
+    module.merge(TransactionPayment::new(client.clone()).into_rpc())?;
 
     module.merge(
         Babe::new(
