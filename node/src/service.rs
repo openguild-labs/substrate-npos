@@ -82,7 +82,7 @@ pub type Service<TRpcBuilder> = PartialComponents<
     ParachainBackend,
     FullSelectChain,
     sc_consensus::DefaultImportQueue<Block>,
-    sc_transaction_pool::FullPool<Block, ParachainClient>,
+    TransactionPool,
     (
         ParachainBlockImport,
         TRpcBuilder,
