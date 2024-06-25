@@ -20,7 +20,7 @@ Now you are ready to kickstart working on the later steps.
 | [Historical](https://docs.rs/pallet-session/latest/pallet_session/historical/index.html) | An opt-in utility for tracking historical sessions in FRAME-session. Rather than store the full session data for any given session, we instead **commit to the roots of merkle tries containing the session data**. These **roots and proofs of inclusion can be generated at any time during the current session**. Afterwards, **the proofs can be fed to a consensus module when reporting misbehavior**. |
 > offenses, babe, grandpa, im-online: work together to deal with illegal writing of validators. Just like a validator produces multiple blocks in the current slot, GRANDPA voters vote multiple times for different blocks in the same round. A large number of The validator is offline for a long time, etc.
 
-## Ressource
+## Resources
 - Substrate NPOS implementation guide - Chinese version: https://zhuanlan.zhihu.com/p/161293660
 - Advanced Staking Concepts on Polkadot Wiki: https://wiki.polkadot.network/docs/learn-staking-advanced
 - Substrate Stencil (NPOS blockchain with Substrate): https://github.com/kaichaosun/substrate-stencil
