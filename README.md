@@ -1,4 +1,7 @@
 # Nominated Proof of Stake (NPOS) Substrate-based Chain Tutorial
+
+![Tutorial_Design](https://github.com/openguild-labs/substrate-npos/assets/56880684/c719b312-3117-4c75-a963-fcc5610b6fff)
+
 Substrate node template is a node program for quickly developing Substrate application chains. It has a built-in **Proof of Authority (PoA)** consensus algorithm. The block generation algorithm is Aura , which means that the nodes and order of block generation are fixed. An online public blockchain application needs to achieve a certain degree of decentralization and ensure security through random block generation. Substrate's built-in Proof of Stake (PoS) consensus algorithm is designed to meet such needs.
 ## Create a new Parachain project with `pop-cli`
 You can learn more about `pop-cli` here: https://github.com/r0gue-io/pop-cli
