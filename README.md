@@ -11,6 +11,15 @@ You can learn more about `pop-cli` here: https://github.com/r0gue-io/pop-cli
 - Run your local relaychain network using Zombinet with `pop up parachain -f ./zombienet.toml`
 Now you are ready to kickstart working on the later steps.
 
+## Deliverables
+- [x] Migrate from AURA to hybrid consensus GRANDPA + BABE
+- [x] Implement runtime API & block import queue in the outer node service
+- [ ] Implement `pallet-staking` and integrate with existing consensus mechanism
+- [ ] Implement `pallet-session` for session management
+- [ ] Implement `pallet-nomniation-pool` for nominator registration
+- [ ] Implement election functionalities for active validator selection
+- [ ] Demo of the functionalities on the Polkadot JS Apps
+
 ## Overview of Additional Modules
 
 | Pallet Name | Functionality |
