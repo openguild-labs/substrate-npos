@@ -24,7 +24,7 @@ Now you are ready to kickstart working on the later steps.
 
 | Pallet Name | Functionality |
 | ---- | ---- |
-| Staking | used to manage verification, nomination, cancellation of verification, nomination, verifier score statistics and reward distribution, etc.; |
+| Staking | used to manage verification, nomination, cancellation of verification, verifier score statistics and reward distribution, etc.; |
 | Session | Manage the session keys of the validator (Session Keys), control the length and rotation of the Session; |
 | Authorship | Used in runtime to track the current block producer and uncles. The staking module uses this information to count the points used for rewards; |
 | Utility | Implements the auxiliary function of sending transactions in batches, which is needed by validators to withdraw rewards through front-end apps. |
